@@ -217,22 +217,33 @@ Social CSV ────┘
 
 **Stack:** Python, pandas
 
-A **rule-based** extractor (not an LLM) that analyzes socio-technical metrics and generates "Researched Actionable" recommendations for project maintainers.
+A **rule-based** extractor (not an LLM) that maps pre-defined research recommendations to project metrics. It is backed by a static JSON file (`react_set.json`) containing ~100 recommendations sourced from peer-reviewed software engineering papers.
 
 ### How It Works
 
-1. Reads network metrics for each month
-2. Applies threshold rules to identify risk areas (bus factor, contributor churn, etc.)
-3. Classifies each finding as **Critical**, **Medium**, or **Low** severity
-4. Returns up to 10 actionables per month with references to relevant data
+1. Loads the static rule set from `react_set.json`
+2. For each month, checks which network features exist in the computed data
+3. Returns matching recommendations sorted by an `Importance` score (based on how many research papers cited the recommendation — **not** project-specific risk)
+4. Labels each as **Critical** (importance ≥ 5), **High** (3–4), or **Medium** (1–2)
+
+### Current Limitations
+
+The ReACT system currently provides **generic academic advice** rather than project-specific insights:
+
+- Recommendations are not parameterized with the project's actual metrics (e.g., "you have 15 developers" is not shown)
+- Priority is based on citation count, not computed risk
+- No bus factor, trend analysis, or developer-level detail is provided
+- No consequence explanations or suggested actions
+
+See `docs/features/REACT_ENHANCEMENTS.md` for proposed improvements.
 
 ### Output Format
 
 ```json
 {
   "month_1": [
-    { "title": "Low bus factor detected", "importance": "Critical", "refs": [...] },
-    { "title": "Contributor growth is stagnant", "importance": "Medium", "refs": [...] }
+    { "title": "Maintain a small number of core/active developers.", "importance": 7, "refs": [...] },
+    { "title": "Maintain concise, updated, accessible documentation.", "importance": 6, "refs": [...] }
   ]
 }
 ```
@@ -317,9 +328,24 @@ See `.env.example` for the full list. Key variables:
 
 ## Data Sources
 
+### Zenodo Dataset (Training Corpus)
+
+The [Zenodo dataset](https://zenodo.org/records/15307373) is a **static research artifact** published by the UC Davis DECAL Lab (Nafiz Imtiaz Khan, Vladimir Filkov). It contains pre-computed socio-technical metrics for **260 Apache** and **272 Eclipse** Foundation projects.
+
+**Primary purpose:** These projects went through a known incubation lifecycle with labeled outcomes (graduated, retired, incubating), providing the **ground truth training data** for the Pex-Forecaster neural network. The model learned what "sustainable" vs "abandoned" projects look like from this corpus.
+
+**Secondary purposes:**
+- Instant demo access to 532 projects without running the scraper
+- Benchmark population for comparative analysis
+
+**Limitations:** The data is frozen at the time of publication and is not automatically updated. There is no pipeline or cron job keeping it current. Projects that have changed significantly since publication will show stale metrics.
+
+See `docs/features/DESIGN_LIVE_REFRESH.md` for the proposed solution.
+
+### Live Pipeline Sources
+
 | Source | What It Provides | Access |
 |---|---|---|
-| [Zenodo Dataset](https://zenodo.org/records/15307373) | Pre-computed Apache/Eclipse foundation metrics | Public download (~62MB) |
 | GitHub REST API | Repository metadata, issues | Requires PAT |
 | GitHub GraphQL API | Commit details, file changes | Requires PAT |
 | Git clone (via Rust) | Full commit history analysis | Public repos only |
@@ -346,3 +372,27 @@ JWT tokens are returned on login and must be included in `Authorization: Bearer 
 | Pex-Forecaster tests | pytest | `OSSPREY-Pex-Forecaster/tests/` | `cd OSSPREY-Pex-Forecaster && pytest` |
 | Smoke tests | bash | `./smoke_test.sh` | `./smoke_test.sh` |
 | E2E / Integration | Not yet implemented | — | — |
+
+---
+
+## Known Limitations
+
+### Social Network Empty for GitHub Projects
+
+The social network builder was designed for Apache/Eclipse **mailing list data** where reply chains are explicit (`In-Reply-To` headers). GitHub issues use a flat comment model without threading. When processing GitHub-hosted projects, the social network panel will be empty and email-related stats will show zero.
+
+**Affected panels:** Social Network, Social Network Node, Number of Emails, Senders, Emails per Sender.
+
+### Fork History Contamination
+
+The Rust scraper clones the full git history, which for forked repos includes all upstream commits. For example, processing OpenCloud (forked from ownCloud Infinite Scale in January 2025) returns 157 developers and 104,750 rows going back to 2019 — the vast majority from ownCloud.
+
+See `docs/features/DESIGN_DEVELOPER_ACTIVITY.md` for the proposed fork detection and toggle solution.
+
+### GPU Acceleration
+
+PyTorch inside Docker on macOS runs on **CPU only**. Apple Metal/MPS is not available through Docker's Linux VM. Performance is sufficient for current models but slower than native execution.
+
+### Frontend Timeout on Long Processing
+
+The frontend HTTP request may time out during long-running pipeline processing (e.g., large repos with 60K+ issues). The backend continues processing and caches the results, so resubmitting the same URL returns immediately.
