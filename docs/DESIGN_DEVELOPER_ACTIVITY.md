@@ -143,10 +143,12 @@ def get_developer_activity(project_name):
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Developer Activity                               [?] tooltip│
+│  Developer Activity                     [🔄 Refresh] [?]    │
+│  Last computed: Mar 29, 2026 at 2:34 PM                      │
 │                                                              │
 │  ⚠ Forked from owncloud/ocis on Jan 14, 2025                │
 │  [✓] Show OpenCloud commits only  [ ] Include fork history   │
+│                                     Hide bots: [ON]          │
 │                                                              │
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │ 🟢 8 Active   🟡 5 Fading   🔴 12 Inactive   BF: 3   │  │
@@ -166,7 +168,11 @@ def get_developer_activity(project_name):
 └──────────────────────────────────────────────────────────────┘
 ```
 
-When `is_fork` is true in the API response, the fork banner and radio toggle appear. Switching the toggle re-fetches with `?include_fork_history=true`. For non-fork repos, the banner is hidden.
+**Controls:**
+- **Fork toggle:** Only visible when `is_fork` is true. Switching re-fetches with `?include_fork_history=true`.
+- **Hide bots switch:** `VSwitch` toggled ON by default. Hides accounts matching known bot patterns (`[bot]`, `dependabot`, `renovate`). Filtering is client-side (bot flag comes from the API response).
+- **Refresh button:** Re-fetches from the API with `?force_refresh=true`, which recomputes from the CSV and updates the cache.
+- **Last computed:** Displays `generated_at` from the cached response. Helps users know if they're looking at stale data.
 
 ### Features
 
@@ -190,29 +196,34 @@ When `is_fork` is true in the API response, the fork banner and radio toggle app
 
 ### Placement
 
-Replace the **"Email Links" panel** (currently shows "Select A Developer" with no data for GitHub projects) with the new Developer Activity panel.
+Insert Developer Activity as a **new full-width row** between the Social/Technical Network row and the Network Node row. All existing panels stay in place.
 
 **File:** `OSSPREY-FrontEnd-Server/src/pages/dashboard.vue`
 
 ```diff
- <!-- Fourth Row: Social and Technical Network Cards -->
- ...
+      <!-- Fourth Row: Social and Technical Network Cards -->
+      <VCol cols="12" md="6">
+        <VCard style="height: 400px;"><SocialNetwork /></VCard>
+      </VCol>
+      <VCol cols="12" md="6">
+        <VCard style="height: 400px;"><TechnicalNetwork /></VCard>
+      </VCol>
+    </VRow>
 
--<VCol cols="6" md="6" sm="6">
--  <SocialNetworkNode />
--</VCol>
-+<VCol cols="12" md="12" sm="12">
-+  <VCard style="height: 400px;">
-+    <DeveloperActivity />
-+  </VCard>
-+</VCol>
-+
-+<VCol cols="6" md="6" sm="6">
-+  <SocialNetworkNode />
-+</VCol>
++   <!-- NEW: Developer Activity Row -->
++   <VRow>
++     <VCol cols="12">
++       <VCard style="height: 500px;">
++         <DeveloperActivity />
++       </VCard>
++     </VCol>
++   </VRow>
+
+    <VRow>
+      <VCol cols="6" md="6" sm="6">
+        <SocialNetworkNode />
+      </VCol>
 ```
-
-> **Decision needed:** Should Developer Activity replace SocialNetworkNode (which shows "Email Links" on the left), or should it be inserted as a new full-width row? The Email Links panel is always empty for GitHub projects, so replacing it seems natural.
 
 ### Store Integration
 
@@ -261,12 +272,14 @@ Trigger: Call `fetchDeveloperActivity()` when `selectedProject` changes (add to 
 |---|---|
 | No commit CSV found | Return 404 with message "No commit data. Process this repo first." |
 | Developer name variations | Group by email as primary key, display most recent `name` |
-| Bot accounts (dependabot) | Include in table but tag with 🤖 icon; exclude from bus factor |
+| Bot accounts (dependabot, renovate, `[bot]`) | Flagged with `is_bot: true` in API response. Hidden by default via "Hide bots" switch. Always excluded from bus factor calculation. |
 | Very large repos (>500 devs) | Paginate, default to Active + Fading only |
-| Foundation projects (not local) | API reads from MongoDB `commit_links` collection instead of CSV |
+| Foundation projects (Apache/Eclipse) | **Deferred.** Panel shows "Developer activity is available for GitHub-processed repos only" with a link to process via URL. Foundation data uses a different schema (MongoDB `commit_links`) and will be supported in a future iteration. |
 | Forked repos | Auto-detect via GitHub API `fork` field; default to post-fork data only |
 | Non-fork repos | Toggle is hidden; all commits shown |
 | GitHub API unavailable | Fall back to showing all commits with a note that fork detection failed |
+| Cached data exists | Serve from MongoDB cache. Display `generated_at` timestamp in panel header. |
+| `?force_refresh=true` | Recompute from CSV, update MongoDB cache, return fresh data |
 
 ---
 
@@ -283,9 +296,29 @@ Trigger: Call `fetchDeveloperActivity()` when `selectedProject` changes (add to 
 
 ---
 
-## Open Questions
+## Decisions (Resolved)
 
-1. **Replace or add?** Should Developer Activity replace the Email Links panel (empty for GitHub projects), or be added as a new row?
-2. **Foundation projects:** Should this also work for Apache/Eclipse projects? The data structure is different (MongoDB vs. CSV).
-3. **Bot filtering:** Should bots (dependabot, renovate) be hidden by default or shown with a tag?
-4. **Caching:** Should the computed activity data be cached in MongoDB, or recomputed each time from the CSV?
+| # | Question | Decision |
+|---|---|---|
+| 1 | Replace or add? | **Add a new full-width row** between Social/Tech Networks and Network Node panels. All existing panels stay. |
+| 2 | Foundation projects? | **Deferred.** GitHub-processed repos only for v1. Foundation data uses a different schema and will be added later. |
+| 3 | Bot filtering? | **Hidden by default** via a "Hide bots" switch (ON by default). Bots detected by name pattern (`[bot]`, `dependabot`, `renovate`). Always excluded from bus factor. |
+| 4 | Caching? | **Cache in MongoDB.** Show `generated_at` timestamp and a Refresh button. `?force_refresh=true` recomputes from CSV. No reason not to cache — the CSV doesn't change until the repo is re-processed. |
+
+### Caching Strategy
+
+**Collection:** `developer_activity` in `decal-db`
+
+```json
+{
+  "project_name": "opencloud",
+  "include_fork_history": false,
+  "generated_at": "2026-03-29T21:34:00Z",
+  "summary": { "..." },
+  "developers": [ "..." ]
+}
+```
+
+**Cache key:** `(project_name, include_fork_history)` — two separate cache entries for fork/non-fork views.
+
+**Invalidation:** Only when `?force_refresh=true` is passed (user clicks Refresh button), or when the project is re-processed via `upload_git_link`.
