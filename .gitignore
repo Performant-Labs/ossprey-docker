@@ -1,0 +1,23 @@
+# ── Sensitive / local ────────────────────────────────────────
+.env
+data/
+
+# ── Sub-repositories (tracked independently) ────────────────
+OSSPREY-BackEnd-Server/
+OSSPREY-FrontEnd-Server/
+OSSPREY-OSS-Scraper-Tool/
+OSSPREY-Pex-Forecaster/
+OSSPREY-ReACT-API/
+OSSPREY-Website/
+
+# ── Artifacts from previous sessions ────────────────────────
+implementation_plan.md
+task.md
+
+# ── OS / editor ─────────────────────────────────────────────
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
