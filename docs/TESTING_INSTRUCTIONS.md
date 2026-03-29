@@ -260,7 +260,60 @@ The frontend makes API calls to `VITE_API_BASE_URL` (default `http://localhost:5
 
 ---
 
-## Smoke Tests
+## Running Tests
+
+### Unit Tests (Upstream)
+
+Each sub-repo ships its own unit tests. These use mocks (no live services required) and run in seconds.
+
+#### Backend (pytest + mongomock)
+
+```bash
+# Install pytest in the container (first time only)
+docker exec ossprey-backend pip install pytest -q
+
+# Run all backend tests
+docker exec ossprey-backend python -m pytest tests/ -v
+```
+
+| Test File | What It Covers |
+|---|---|
+| `test_register_user.py` | User registration saves timestamp |
+| `test_login_logout_tracking.py` | Login/logout event recording |
+| `test_user_endpoints.py` | User listing and repo retrieval |
+| `test_process_repo.py` | Repo processing request saved |
+| `test_view_tracking.py` | Page view counter and timestamps |
+
+> **Known issue:** `test_view_tracking.py::test_record_view_adds_timestamp` occasionally fails due to microsecond rounding. This is a test timing flake, not a real bug.
+
+#### Frontend (Node test runner)
+
+```bash
+docker exec ossprey-frontend npm test
+```
+
+| Test File | What It Covers |
+|---|---|
+| `navigation.test.js` | Route navigation and page transitions |
+| `repos-table.test.js` | Repository table rendering |
+
+#### Pex-Forecaster (pytest)
+
+```bash
+# Run from host (not containerized)
+cd OSSPREY-Pex-Forecaster
+pip install -e . && pytest tests/ -v
+```
+
+| Test File | What It Covers |
+|---|---|
+| `test_forecaster.py` | Forecast computation and model inference |
+
+> **Note:** Upstream tests use **mongomock** and do not test real Docker networking, CORS, GitHub API access, or the Rust scraper. This is why the smoke and integration tests below are essential.
+
+---
+
+### Smoke Tests (Stack Validation)
 
 After bringing the stack up, run the automated smoke test to verify everything is working:
 
@@ -270,7 +323,7 @@ After bringing the stack up, run the automated smoke test to verify everything i
 
 The script validates the full stack in ~3 seconds, registers and logs in a temporary user (cleaned up automatically), and exits with code 0 on success or 1 on any failure.
 
-### Test Matrix
+#### Smoke Test Matrix
 
 | # | Category | Test | What It Checks |
 |---|---|---|---|
@@ -283,7 +336,7 @@ The script validates the full stack in ~3 seconds, registers and logs in a tempo
 | 7 | Port Accessibility | Port 5001 is not AirPlay | Server header is gunicorn, not AirTunes |
 | 8 | CORS | Allows origin `localhost:3000` | `Access-Control-Allow-Origin` header present |
 | 9 | CORS | Allows POST method | OPTIONS preflight returns allowed methods |
-| 10 | MongoDB Data | ≥10 collections exist | Zenodo dataset was imported |
+| 10 | MongoDB Data | >=10 collections exist | Zenodo dataset was imported |
 | 11 | MongoDB Data | `grad_forecast` has documents | Graduation forecast data is populated |
 | 12 | GitHub Token | Backend has valid token(s) | `GITHUB_TOKEN_*` values are not placeholders |
 | 13 | GitHub Token | `GITHUB_TOKEN` env set | Rust scraper can authenticate with GitHub API |
@@ -294,5 +347,30 @@ The script validates the full stack in ~3 seconds, registers and logs in a tempo
 | 18 | API Endpoints | GET `/api/eclipse_projects` | Eclipse data endpoint (skipped if no data) |
 | 19 | Frontend Content | HTML served with `<html>` tag | Vite is building and serving the app |
 | 20 | Frontend Content | Vue app mounts | App div is present in the HTML |
-| 21 | Gunicorn Config | Timeout ≥ 300s | Worker won't be killed during scraper runs |
+| 21 | Gunicorn Config | Timeout >= 300s | Worker won't be killed during scraper runs |
+
+---
+
+### Integration Test (Full Pipeline)
+
+To verify the end-to-end pipeline (GitHub scraping, ML forecasting, and ReACT extraction), submit a small public repo that is not already in the database:
+
+```bash
+curl -s -X POST http://localhost:5001/api/upload_git_link \
+  -H "Content-Type: application/json" \
+  -d '{"git_link": "https://github.com/Nafiz43/EvidenceBot.git"}'
+```
+
+**Expected response:** JSON with keys `forecast_json`, `git_link`, `metadata`, `react`, `social_net`, `tech_net`. Takes 30-120 seconds depending on repo size.
+
+**What this exercises that unit tests do not:**
+
+| Concern | Unit Tests | Integration Test |
+|---|---|---|
+| Rust scraper binary invocation | Mocked | Live subprocess call via `GITHUB_TOKEN` |
+| GitHub API authentication | Mocked | Real token, real API calls |
+| Gunicorn worker timeout | Not tested | Long-running request under 600s limit |
+| PyTorch forecast on CPU | Mocked | Full model inference |
+| ReACT rule extraction | Mocked | All months processed |
+| CORS across containers | Not tested | Browser-compatible headers verified |
 
