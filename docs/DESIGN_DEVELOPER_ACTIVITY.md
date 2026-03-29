@@ -29,6 +29,30 @@ The commit CSV (`<project>-commit-file-dev.csv`) is already scraped by the Rust 
 - Top committer: Jörn Friedrich Dreyer (1,306 unique commits)
 - The CSV is already mounted at `/opt/ossprey/scraper/output/` in the backend container
 
+### Fork History Detection
+
+The Rust scraper clones the full git history, which for forked repos includes all upstream commits. For example, OpenCloud was forked from ownCloud Infinite Scale (ocis) in January 2025, but the commit CSV contains 15,310 pre-fork commits from 2019–2024 by 144 developers who never contributed to OpenCloud.
+
+**Without filtering, the data is misleading:**
+
+| Scope | Developers | Commits | Date Range |
+|---|---|---|---|
+| Full history (unfiltered) | 157 | 17,065 | 2019–2026 |
+| Post-fork only (OpenCloud) | ~25 | ~1,755 | Jan 2025–present |
+
+**Detection method:** Query the GitHub API for `created_at` and `fork` fields:
+
+```python
+# GET https://api.github.com/repos/opencloud-eu/opencloud
+{
+  "fork": true,
+  "created_at": "2025-01-14T08:00:00Z",
+  "parent": { "full_name": "owncloud/ocis" }
+}
+```
+
+If `fork == true`, store `created_at` as the fork boundary date. Default to showing only post-fork data, with a toggle to include the full inherited history.
+
 ---
 
 ## Backend API
@@ -36,8 +60,12 @@ The commit CSV (`<project>-commit-file-dev.csv`) is already scraped by the Rust 
 ### New Endpoint
 
 ```
-GET /api/developer_activity/<project_name>
+GET /api/developer_activity/<project_name>?include_fork_history=false
 ```
+
+| Query Param | Type | Default | Description |
+|---|---|---|---|
+| `include_fork_history` | bool | `false` | If `true`, include pre-fork commits. If `false` (default), filter to post-fork date only. Has no effect on non-fork repos. |
 
 ### Response Schema
 
@@ -45,11 +73,15 @@ GET /api/developer_activity/<project_name>
 {
   "project": "opencloud",
   "generated_at": "2026-03-29T21:34:00Z",
+  "is_fork": true,
+  "fork_date": "2025-01-14T08:00:00Z",
+  "parent_repo": "owncloud/ocis",
+  "include_fork_history": false,
   "summary": {
-    "total_developers": 157,
+    "total_developers": 25,
     "active": 8,
     "fading": 5,
-    "inactive": 144,
+    "inactive": 12,
     "bus_factor": 3
   },
   "developers": [
@@ -113,8 +145,11 @@ def get_developer_activity(project_name):
 ┌──────────────────────────────────────────────────────────────┐
 │  Developer Activity                               [?] tooltip│
 │                                                              │
+│  ⚠ Forked from owncloud/ocis on Jan 14, 2025                │
+│  [✓] Show OpenCloud commits only  [ ] Include fork history   │
+│                                                              │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │ 🟢 8 Active   🟡 5 Fading   🔴 144 Inactive   BF: 3  │  │
+│  │ 🟢 8 Active   🟡 5 Fading   🔴 12 Inactive   BF: 3   │  │
 │  └────────────────────────────────────────────────────────┘  │
 │                                                              │
 │  ┌──────────┬────────┬─────────┬──────────┬───────┬───────┐ │
@@ -127,9 +162,11 @@ def get_developer_activity(project_name):
 │  │ Old Dev  │ 🔴     │ 0       │ 180d ago │ 0.0%  │ 5     │ │
 │  └──────────┴────────┴─────────┴──────────┴───────┴───────┘ │
 │                                                              │
-│  Showing 20 of 157 developers    [Show All] [Active Only]    │
+│  Showing 20 of 25 developers     [Show All] [Active Only]    │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+When `is_fork` is true in the API response, the fork banner and radio toggle appear. Switching the toggle re-fetches with `?include_fork_history=true`. For non-fork repos, the banner is hidden.
 
 ### Features
 
@@ -227,6 +264,9 @@ Trigger: Call `fetchDeveloperActivity()` when `selectedProject` changes (add to 
 | Bot accounts (dependabot) | Include in table but tag with 🤖 icon; exclude from bus factor |
 | Very large repos (>500 devs) | Paginate, default to Active + Fading only |
 | Foundation projects (not local) | API reads from MongoDB `commit_links` collection instead of CSV |
+| Forked repos | Auto-detect via GitHub API `fork` field; default to post-fork data only |
+| Non-fork repos | Toggle is hidden; all commits shown |
+| GitHub API unavailable | Fall back to showing all commits with a note that fork detection failed |
 
 ---
 
